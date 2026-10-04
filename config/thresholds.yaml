@@ -1,0 +1,205 @@
+# Every threshold in HERD. None of these may appear as a literal in code.
+# Calibrated in T044 against the adversarial mutation set; if the data disagrees
+# with a value here, the data wins and an ADR records the change.
+
+strain:
+  # ADR-0007 - incremental assignment bands
+  same_strain: 0.88        # >= this: attach, serve cached verdict
+  mutation: 0.70           # >= this and < same_strain: child strain
+  # < mutation: new strain, full investigation
+  amount_tolerance: 0.20   # ADR-0008 hard gate: amounts within 20%
+  # Below this many characters of extracted text there is not enough signal to
+  # recognise anything, and a near-empty claim would act as an attractor that
+  # every other near-empty claim merges into. Found by calibration: two blank
+  # fixtures merged into one strain, which is the shape of a poisoning attack.
+  min_content_chars: 25
+
+cascade:
+  # ADR-0011 - |posterior| needed to exit each tier
+  exit:
+    tier0: 0.90
+    tier1: 0.85
+    tier2: 0.80
+    # tier 3 is terminal: there is nothing left to buy, so there is no bar
+  # Asymmetry: exiting toward FALSE is more expensive than toward UNVERIFIED,
+  # because a false accusation costs far more than a slow answer (ADR-0014).
+  false_exit_multiplier: 1.0     # applied to the exit bar when heading to FALSE
+  unverified_exit_multiplier: 0.85
+  # A deadline, not a per-agent timeout: each tier gets the time that is left,
+  # so a slow Tier 1 cannot silently spend Tier 2's budget and leave the user
+  # watching a spinner.
+  deadline_ms: 20000
+
+verdict:
+  # ADR-0014 - calibrated bands on P(false). UNVERIFIED is widest on purpose.
+  bands:
+    false_above: 0.90
+    misleading_above: 0.65
+    unverified_above: 0.20
+    # <= unverified_above -> TRUE
+  abstention_target:
+    lo: 0.15
+    hi: 0.35
+
+  # ADR-0028 - TRUE is not reachable by arithmetic alone.
+  # Every other label can be earned by accumulating evidence. TRUE cannot,
+  # because the evidence that would earn it is an ABSENCE: no fraud rule fired.
+  # Absence of fraud indicators is not evidence of authenticity — it is equally
+  # consistent with a well-made scam, or with a credential phish that never
+  # mentions money. Confirming a notice is genuine requires an agent that
+  # actually found it on a source that is entitled to publish it.
+  #
+  # Enforcing this with a support cap was tried first and rejected: the cap
+  # only binds at particular values of log_odds_per_unit_strength, so a later
+  # recalibration would silently re-enable unfounded confirmations.
+  true_requires_confirmation: true
+  confirming_agents:
+    - OpenWebResearch
+
+  # ADR-0026 - evidence that can shorten an investigation but never BE one.
+  # Seeing this exact template at another college is a strong hint and a
+  # terrible verdict: it means one institution's mistake would propagate as
+  # every institution's answer, and a poisoned strain at one campus could
+  # convict a genuine notice at another. If the only usable evidence comes from
+  # these agents, the answer is UNVERIFIED no matter how confident the
+  # arithmetic looks. Enforced structurally rather than by shrinking their cap,
+  # because a cap only holds at one particular log_odds_per_unit_strength.
+  cannot_conclude_alone:
+    - StrainPrior
+
+aggregation:
+  # ADR-0013 - within a correlation group only the strongest signal counts at
+  # full weight; the rest are discounted by this factor. Without it the
+  # posterior saturates at 0.99 on every scam.
+  correlated_discount: 0.30
+  prior_false: 0.35              # base rate of falsity among reported claims
+  max_abs_log_odds: 6.0          # hard clamp; keeps confidence away from 1.0
+
+  # Evidence.strength is a unitless 0..1 confidence, NOT a log-odds delta.
+  # Treating it as one silently caps the whole system: a rule the rule set
+  # itself calls "near-conclusive" could only move the posterior from 0.35 to
+  # 0.55, and no combination of Tier-0 evidence could ever reach FALSE. This is
+  # the conversion, and it is calibrated (T044b), not guessed.
+  log_odds_per_unit_strength: 3.0
+
+  # Total raw rule weight at which a single agent is maximally confident.
+  # Below it, strength scales linearly; it can never exceed 1.0, so no single
+  # agent can saturate the posterior on its own.
+  agent_saturation: 1.0
+
+  # Per-agent contradiction caps (docs/03). Support is uncapped where noted.
+  # Note: Tier-0 support is NOT capped to stop it confirming claims — that is
+  # handled structurally by verdict.true_requires_confirmation, which cannot be
+  # undone by recalibrating a scale factor.
+  caps:
+    StrainPrior:
+      contradicts: 0.45          # ADR-0026: can shorten, can never conclude
+      supports: 0.45
+
+  # ADR-0026. History HERE is stronger than history ELSEWHERE, because here we
+  # know how the conclusion was reached; elsewhere we deliberately read only
+  # the label on the sighting and never the other institution's evidence.
+  # Both are bounded by caps.StrainPrior and neither can conclude alone.
+  strain_prior:
+    same_institution: 0.75
+    cross_institution: 0.35
+
+  reliability:                   # learned from ground truth; updated by T104
+    FraudHeuristics: 1.00
+    TemplateProvenance: 1.00
+    DomainForensics: 0.90
+    URLSafety: 1.00
+    ContactForensics: 0.80
+    OpenWebResearch: 0.70
+    StrainPrior: 0.85
+
+agents:
+  # Per-agent tunables. Strengths are 0..1 confidences (ADR-0027); the
+  # aggregator converts them via aggregation.log_odds_per_unit_strength.
+  domain_forensics:
+    timeout_s: 4.0
+    # Two labels this close apart are not a coincidence at this length.
+    # Higher and 'iare.ac.in' vs 'cbit.ac.in' start matching each other.
+    lookalike_max_edit_distance: 2
+    lookalike_min_label_chars: 5
+    # An institution token shorter than this ('iit', 'nit') appears inside too
+    # many innocent words to accuse anyone with.
+    impersonation_min_token_chars: 5
+    new_domain_days: 90
+    very_new_domain_days: 30
+    strength:
+      impersonating_official: 0.90
+      lookalike: 0.85
+      very_new_domain: 0.70
+      new_domain: 0.35
+      suspicious_tld: 0.30
+      official_domain: 0.35
+
+  url_safety:
+    timeout_s: 4.0
+    # A blocklist hit is as close to proof as an automated check gets.
+    strength:
+      threat_match: 0.95
+    # There is deliberately no 'clean' strength. Safe Browsing lists a domain
+    # days after it is reported, and campus scam domains are usually hours old,
+    # so "not on the list" is overwhelmingly the answer for real scams too.
+    # Reading that as evidence of safety is ADR-0028's mistake in miniature.
+
+  contact_forensics:
+    timeout_s: 2.0
+    strength:
+      unofficial_upi: 0.80
+      lookalike_email_domain: 0.85
+      impersonating_email_domain: 0.90
+      freemail_contact: 0.45
+      personal_phone_only: 0.25
+      official_email: 0.40
+
+  open_web_research:
+    # Tier 3 is terminal and runs only when every cheaper tier abstained, so it
+    # may spend longer than a Tier 1 probe. Bounded by cascade.deadline_ms.
+    timeout_s: 10.0
+
+  llm_client:
+    # Extraction and prose share one budget. Longer than the research timeout
+    # because extraction blocks the whole pipeline rather than one agent.
+    timeout_s: 15.0
+
+spread:
+  # ADR-0017 - the model is chosen by sample size, never by how it looks
+  tiers:
+    none_below: 5
+    bayesian_to: 20
+    logistic_to: 60
+    # > logistic_to -> seir_hawkes
+  interval_widening_no_message_time: 1.4   # ADR-0018 penalty for report-time only
+  velocity:
+    # Report-density bands for the UI's spread indicator. These are presentation
+    # thresholds, NOT the calibrated spread model (ADR-0017) — they describe how
+    # many genuine, de-duplicated reports of one strain within a window count as
+    # "spreading". They are deliberate judgement, not measurement: 5 independent
+    # reports of the same strain inside 10 minutes on one campus is fast by
+    # inspection. They must never be used to project a future case count.
+    high_count: 5
+    high_minutes: 10
+    medium_count: 3
+    medium_minutes: 30
+
+alerting:
+  # ADR-0019 - expected harm, not a threshold
+  harm_per_victim_inr: 750.0
+  fatigue_cost_per_alert: 0.05     # cost term INSIDE the rule, not a suppressor
+  fatigue_window_hours: 24
+  max_alerts_per_cohort_per_day: 3
+  unreached_floor: 5.0             # below this there is nobody left to warn
+
+latency_budget_ms:
+  cache_hit_p95: 300
+  tier0_conclusive: 2000
+  full_cascade: 20000
+  alert_fanout: 1000
+
+ingest:
+  idempotency_window_s: 60
+  max_image_bytes: 10485760
+  salt_rotation_days: 30
