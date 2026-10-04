@@ -1,0 +1,28 @@
+{
+  "rewrites": [
+    {
+      "source": "/ingest",
+      "destination": "https://herd-backend-ofrf.onrender.com/ingest"
+    },
+    {
+      "source": "/context",
+      "destination": "https://herd-backend-ofrf.onrender.com/context"
+    },
+    {
+      "source": "/health",
+      "destination": "https://herd-backend-ofrf.onrender.com/health"
+    },
+    {
+      "source": "/override/:path*",
+      "destination": "https://herd-backend-ofrf.onrender.com/override/:path*"
+    },
+    {
+      "source": "/ws",
+      "destination": "https://herd-backend-ofrf.onrender.com/ws"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
